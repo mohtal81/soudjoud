@@ -1,0 +1,117 @@
+name: Build Soudjoud As-Sahw APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build APK (Android)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev build-essential libsqlite3-dev libltdl-dev
+
+      - name: Install Buildozer and Cython
+        run: |
+          pip install --upgrade pip setuptools
+          pip install buildozer cython==0.29.33
+
+      - name: Create assets/fonts directory
+        run: mkdir -p assets/fonts
+
+      - name: Download NotoNaskhArabic font
+        run: |
+          python3 -c "
+          import urllib.request, os
+          url = 'https://github.com/google/fonts/raw/main/ofl/notonaskharabic/NotoNaskhArabic%5Bwght%5D.ttf'
+          dest = 'assets/fonts/NotoNaskhArabic-Regular.ttf'
+          if not os.path.isfile(dest):
+              urllib.request.urlretrieve(url, dest)
+              print('Font downloaded OK')
+          "
+
+      - name: Create write_spec.py
+        run: |
+          cat > write_spec.py << 'PYEOF'
+          import textwrap
+          content = textwrap.dedent("""
+              [app]
+              title = Soudjoud As-Sahw
+              package.name = soudjoudassahw
+              package.domain = org.islamic
+              source.dir = .
+              source.include_exts = py,kv,ttf,png,jpg,jpeg,atlas,json
+              source.include_patterns = assets/*,assets/fonts/*,kv/*,screens/*
+              version = 1.0.0
+              requirements = python3,kivy==2.3.0,kivymd==1.2.0,pillow
+              orientation = portrait
+              fullscreen = 0
+              android.permissions = WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,INTERNET
+              android.api = 33
+              android.minapi = 21
+              android.ndk = 25b
+              android.sdk = 33
+              android.arch = arm64-v8a
+              android.accept_sdk_license = True
+
+              [buildozer]
+              log_level = 2
+              warn_on_root = 1
+          """).strip()
+          with open("buildozer.spec", "w") as f:
+              f.write(content + "\n")
+          print("buildozer.spec written OK")
+          PYEOF
+
+      - name: Generate buildozer.spec
+        run: python3 write_spec.py
+
+      - name: Show buildozer.spec
+        run: cat buildozer.spec
+
+      - name: Cache .buildozer
+        uses: actions/cache@v4
+        with:
+          path: |
+            .buildozer
+            ~/.buildozer
+          key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            buildozer-${{ runner.os }}-
+
+      - name: Build APK
+        env:
+          JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+        run: |
+          yes | buildozer android debug 2>&1 | tee buildozer.log
+          echo "=== bin/ ==="
+          ls -la bin/ || echo "Dossier bin introuvable"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: soudjoud-assahw-debug
+          path: bin/*.apk
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildozer-log
+          path: buildozer.log
+          retention-days: 7
